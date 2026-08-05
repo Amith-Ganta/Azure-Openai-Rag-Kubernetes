@@ -1,0 +1,109 @@
+name: Build and Deploy to AKS
+
+# Continuous delivery for the Investor Intelligence RAG API.
+# On every push to main we build the container, push it to Azure Container
+# Registry, and roll it out to AKS. Authentication to Azure uses Microsoft
+# Entra ID workload-identity federation (OIDC) — GitHub Actions exchanges a
+# short-lived OIDC token for an Azure access token at runtime, so no long-lived
+# client secret is ever stored in GitHub.
+
+on:
+  push:
+    branches: [main]
+    # Skip runs that only touch docs/infra — they don't change the image.
+    paths-ignore:
+      - '**.md'
+      - 'terraform/**'
+      - '.gitignore'
+  workflow_dispatch: {}   # allow manual runs from the Actions tab
+
+# Only one deploy at a time; cancel an in-flight run if a newer commit lands.
+concurrency:
+  group: deploy-aks-${{ github.ref }}
+  cancel-in-progress: true
+
+# OIDC federation needs id-token: write. contents: read is the least privilege
+# required for actions/checkout.
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  IMAGE_REPOSITORY: invint          # repository name inside ACR
+  K8S_DEPLOYMENT: invint            # Deployment/Service name in the cluster
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment: production          # gate + audit trail in the GitHub UI
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Deterministic, immutable image tag = the commit SHA. We also move a
+      # :latest tag for humans, but the rollout below pins the SHA so every
+      # deploy is reproducible and rollbacks are exact.
+      - name: Compute image tags
+        id: tags
+        run: |
+          echo "sha_tag=${{ secrets.ACR_LOGIN_SERVER }}/${IMAGE_REPOSITORY}:${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=${{ secrets.ACR_LOGIN_SERVER }}/${IMAGE_REPOSITORY}:latest" >> "$GITHUB_OUTPUT"
+
+      - name: Azure login (Entra ID OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Authenticate Docker to ACR using the Azure AD token from the step above.
+      # No admin username/password needed on the CI side.
+      - name: Log in to Azure Container Registry
+        run: az acr login --name ${{ secrets.ACR_NAME }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./dockerfile
+          push: true
+          tags: |
+            ${{ steps.tags.outputs.sha_tag }}
+            ${{ steps.tags.outputs.latest_tag }}
+          # Cache layers in the registry to keep subsequent builds fast.
+          cache-from: type=registry,ref=${{ secrets.ACR_LOGIN_SERVER }}/${{ env.IMAGE_REPOSITORY }}:buildcache
+          cache-to: type=registry,ref=${{ secrets.ACR_LOGIN_SERVER }}/${{ env.IMAGE_REPOSITORY }}:buildcache,mode=max
+
+      - name: Get AKS credentials
+        run: |
+          az aks get-credentials \
+            --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} \
+            --name ${{ secrets.AKS_CLUSTER_NAME }} \
+            --overwrite-existing
+
+      # Apply the Service (idempotent) and set the Deployment's image to the
+      # exact SHA we just pushed. `kubectl set image` triggers a rolling update
+      # only when the tag actually changes, so redeploys are clean.
+      - name: Deploy to AKS
+        run: |
+          kubectl apply -f k8s/service.yaml
+          kubectl apply -f k8s/deployment.yaml
+          kubectl set image deployment/${K8S_DEPLOYMENT} \
+            ${K8S_DEPLOYMENT}=${{ steps.tags.outputs.sha_tag }}
+
+      - name: Verify rollout
+        run: kubectl rollout status deployment/${K8S_DEPLOYMENT} --timeout=180s
+
+      - name: Report deployed image
+        if: always()
+        run: |
+          echo "### Deployed image" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          kubectl get deployment/${K8S_DEPLOYMENT} \
+            -o jsonpath='{.spec.template.spec.containers[0].image}' >> "$GITHUB_STEP_SUMMARY" || true
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

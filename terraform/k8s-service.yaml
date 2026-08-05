@@ -1,0 +1,15 @@
+# Service is unchanged from ../k8s/service.yaml (no registry name in it).
+# Copied here so the whole kubectl step lives in one folder.
+# Apply with: kubectl apply -f k8s-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: invint
+spec:
+  selector:
+    app: invint
+  type: LoadBalancer
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8000

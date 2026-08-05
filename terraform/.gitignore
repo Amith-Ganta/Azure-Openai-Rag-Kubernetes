@@ -1,0 +1,12 @@
+# Terraform state can contain secrets (kube config, identity IDs). Never commit.
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+crash.log
+*.tfvars
+!example.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json

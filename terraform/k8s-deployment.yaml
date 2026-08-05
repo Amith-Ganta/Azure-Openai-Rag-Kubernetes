@@ -1,0 +1,36 @@
+# Corrected deployment manifest.
+# Fixes vs ../k8s/deployment.yaml:
+#   - registry: invintelligence -> inveintelligence (the real ACR name)
+#   - tag: latest -> v1 (the tag actually pushed to ACR)
+# Apply with: kubectl apply -f k8s-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: invint
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: invint
+  template:
+    metadata:
+      labels:
+        app: invint
+    spec:
+      # Pull creds for the private ACR. Created out-of-band by the user with:
+      #   kubectl create secret docker-registry acr-pull \
+      #     --docker-server=inveintelligence.azurecr.io \
+      #     --docker-username=inveintelligence --docker-password='<ACR admin pw>'
+      # Used because the AKS managed-identity (AcrPull) path returned anonymous
+      # 401s on this Student-tier registry; admin-cred pull is deterministic.
+      imagePullSecrets:
+        - name: acr-pull
+      containers:
+        - name: invint
+          image: inveintelligence.azurecr.io/invint:v1
+          imagePullPolicy: Always
+          envFrom:
+            - secretRef:
+                name: invint-secrets
+          ports:
+            - containerPort: 8000

@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: invint
+  labels:
+    app: invint
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: invint
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0      # keep the old pod serving until the new one is Ready
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: invint
+    spec:
+      # Pull credentials for the private ACR. The AKS managed-identity (AcrPull)
+      # path returns anonymous 401s on this registry, so we use an admin-cred
+      # docker-registry secret created out-of-band (kubectl create secret
+      # docker-registry acr-pull ...). Never stored in git.
+      imagePullSecrets:
+        - name: acr-pull
+      containers:
+        - name: invint
+          # Registry: inveintelligence (the real ACR). CI overwrites the tag
+          # with the commit SHA via `kubectl set image` on every deploy; this
+          # value is the bootstrap default for a fresh cluster.
+          image: inveintelligence.azurecr.io/invint:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+          # App configuration and cloud credentials come from the invint-secrets
+          # Secret (created out-of-band from .env), not from git.
+          envFrom:
+            - secretRef:
+                name: invint-secrets
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi

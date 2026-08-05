@@ -1,0 +1,37 @@
+# Environment Variables
+.env
+.env.*
+
+# Git
+.git
+.gitignore
+
+# Python Cache
+__pycache__/
+*.pyc
+
+# Virtual Environment
+.venv/
+venv/
+Azure/
+
+# IDE
+.vscode/
+.idea/
+
+# Documentation
+*.md
+
+# Ingested source data (re-ingested at runtime, not needed in the image)
+data/
+
+# Local SQLite fallback file (created at runtime by get_resilient_engine)
+fallback.db
+
+# Backups and logs
+*.bak
+*.log
+
+# Test / notes clutter
+.pytest_cache/
+notes/
