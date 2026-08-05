@@ -49,7 +49,7 @@ On every push to `main` (code changes only — docs and Terraform are ignored):
 
 1. **Authenticate to Azure via OIDC.** GitHub's OIDC token is exchanged for an
    Azure access token through a federated credential on an Entra ID app
-   registration. Nothing but non-secret IDs live in GitHub.
+   registration. No service-principal password lives in GitHub.
 2. **Build and push** the image to ACR, tagged with the 12-char commit SHA
    (immutable, so rollbacks are exact) plus a moving `:latest`.
 3. **Deploy to AKS** with `kubectl set image`, pinning the SHA tag, then wait on
@@ -58,9 +58,17 @@ On every push to `main` (code changes only — docs and Terraform are ignored):
 ### Why OIDC over a stored service-principal secret
 
 The course uses an `AZURE_CREDENTIALS` JSON blob (a service-principal password)
-in a GitHub secret. This repo uses Entra ID federated credentials instead: the
-runner gets a fresh, short-lived token per run, there is no password to rotate
-or leak, and the trust is scoped to exactly this repo and its `main` branch.
+in a GitHub secret. This repo uses Entra ID federated credentials for the Azure
+control plane and the AKS deploy instead: the runner gets a fresh, short-lived
+token per run, there is no service-principal password to rotate or leak, and the
+trust is scoped to exactly this repo and its `main` branch.
+
+The container-registry push is the one exception. Pushing to ACR with the
+federated service principal's `AcrPush` role is the intended design, but this
+registry's data plane does not honour token-based push for the principal, so the
+push step authenticates with the registry's own admin credential, supplied as
+the `ACR_USERNAME` / `ACR_PASSWORD` GitHub secrets. Everything else stays
+passwordless.
 
 ## Configuration and secrets
 
