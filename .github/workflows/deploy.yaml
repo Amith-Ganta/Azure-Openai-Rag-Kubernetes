@@ -57,13 +57,32 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # Authenticate Docker to ACR using the Azure AD token from the step above.
-      # No admin username/password needed on the CI side.
-      - name: Log in to Azure Container Registry
-        run: az acr login --name ${{ secrets.ACR_NAME }}
+      # Exchange the Entra ID token for a short-lived ACR refresh token instead of
+      # running `az acr login` directly. `az acr login` only writes creds into the
+      # host Docker daemon's config, which the buildx `docker-container` driver used
+      # below does NOT inherit — so the push would go out unauthenticated and ACR
+      # returns `insufficient_scope`. Exposing the token and feeding it to
+      # docker/login-action authenticates the builder itself. The username is the
+      # well-known ACR token sentinel; no admin password is involved.
+      - name: Get ACR access token (Entra ID)
+        id: acr
+        run: |
+          TOKEN=$(az acr login --name ${{ secrets.ACR_NAME }} --expose-token \
+            --query accessToken -o tsv)
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
+      # Authenticate the buildx builder to ACR with the exposed token. The sentinel
+      # GUID username tells ACR to treat the password as an Entra ID token.
+      - name: Log in to Azure Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ACR_LOGIN_SERVER }}
+          username: 00000000-0000-0000-0000-000000000000
+          password: ${{ steps.acr.outputs.token }}
 
       - name: Build and push image
         uses: docker/build-push-action@v6
